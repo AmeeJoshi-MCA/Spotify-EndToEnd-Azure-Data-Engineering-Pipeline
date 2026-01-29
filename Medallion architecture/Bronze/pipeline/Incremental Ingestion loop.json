@@ -1,0 +1,396 @@
+{
+    "name": "Incremental Ingestion loop",
+    "properties": {
+        "activities": [
+            {
+                "name": "ForEach",
+                "type": "ForEach",
+                "dependsOn": [],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@pipeline().parameters.input_loop",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "Azure sql to  datalake",
+                            "type": "Copy",
+                            "dependsOn": [
+                                {
+                                    "activity": "LookupLastCDC",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                },
+                                {
+                                    "activity": "current_timestamp",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "AzureSqlSource",
+                                    "sqlReaderQuery": {
+                                        "value": "SELECT * FROM @{item().schema}.@{item().table}\nWHERE @{item().cdc_col} > '@{if(empty(item().from_date),activity('LookupLastCDC').output.value[0].cdc,item().from_date)}'\n\n",
+                                        "type": "Expression"
+                                    },
+                                    "queryTimeout": "02:00:00",
+                                    "partitionOption": "None"
+                                },
+                                "sink": {
+                                    "type": "ParquetSink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    },
+                                    "formatSettings": {
+                                        "type": "ParquetWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false,
+                                "translator": {
+                                    "type": "TabularTranslator",
+                                    "typeConversion": true,
+                                    "typeConversionSettings": {
+                                        "allowDataTruncation": true,
+                                        "treatBooleanAsNumber": false
+                                    }
+                                }
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "AzureSqlDataset",
+                                    "type": "DatasetReference"
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ParquetSink_dynamic",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "container": "bronze",
+                                        "folder": {
+                                            "value": "@item().table",
+                                            "type": "Expression"
+                                        },
+                                        "file": {
+                                            "value": "@concat(item().table,'_',variables('current'))",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "LookupLastCDC",
+                            "type": "Lookup",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "JsonSource",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSReadSettings",
+                                        "recursive": true,
+                                        "enablePartitionDiscovery": false
+                                    },
+                                    "formatSettings": {
+                                        "type": "JsonReadSettings"
+                                    }
+                                },
+                                "dataset": {
+                                    "referenceName": "Json_dynamic",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "container": "bronze",
+                                        "folder": {
+                                            "value": "@{item().table}CDC",
+                                            "type": "Expression"
+                                        },
+                                        "file": "cdc.json"
+                                    }
+                                },
+                                "firstRowOnly": false
+                            }
+                        },
+                        {
+                            "name": "current_timestamp",
+                            "type": "SetVariable",
+                            "dependsOn": [],
+                            "policy": {
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "variableName": "current",
+                                "value": {
+                                    "value": "@utcNow()",
+                                    "type": "Expression"
+                                }
+                            }
+                        },
+                        {
+                            "name": "If New records",
+                            "type": "IfCondition",
+                            "dependsOn": [
+                                {
+                                    "activity": "Azure sql to  datalake",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@greater(activity('Azure sql to  datalake').output.dataRead,0)",
+                                    "type": "Expression"
+                                },
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "DeleteEmptyFile",
+                                        "type": "Delete",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "dataset": {
+                                                "referenceName": "ParquetSink_dynamic",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "container": "bronze",
+                                                    "folder": {
+                                                        "value": "@item().table",
+                                                        "type": "Expression"
+                                                    },
+                                                    "file": {
+                                                        "value": "@concat(item().table,'_',variables('current'))",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            },
+                                            "enableLogging": false,
+                                            "storeSettings": {
+                                                "type": "AzureBlobStorageReadSettings",
+                                                "recursive": true,
+                                                "enablePartitionDiscovery": false
+                                            }
+                                        }
+                                    }
+                                ],
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "UpdateLastCDC",
+                                        "type": "Copy",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "max_cdc",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "JsonSource",
+                                                "additionalColumns": [
+                                                    {
+                                                        "name": "cdc",
+                                                        "value": {
+                                                            "value": "@activity('max_cdc').output.resultSets[0].rows[0].cdc",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                ],
+                                                "storeSettings": {
+                                                    "type": "AzureBlobFSReadSettings",
+                                                    "recursive": true,
+                                                    "enablePartitionDiscovery": false
+                                                },
+                                                "formatSettings": {
+                                                    "type": "JsonReadSettings"
+                                                }
+                                            },
+                                            "sink": {
+                                                "type": "JsonSink",
+                                                "storeSettings": {
+                                                    "type": "AzureBlobFSWriteSettings"
+                                                },
+                                                "formatSettings": {
+                                                    "type": "JsonWriteSettings"
+                                                }
+                                            },
+                                            "enableStaging": false
+                                        },
+                                        "inputs": [
+                                            {
+                                                "referenceName": "Json_dynamic",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "container": "bronze",
+                                                    "folder": {
+                                                        "value": "@{item().table}CDC",
+                                                        "type": "Expression"
+                                                    },
+                                                    "file": "empty.json"
+                                                }
+                                            }
+                                        ],
+                                        "outputs": [
+                                            {
+                                                "referenceName": "Json_dynamic",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "container": "bronze",
+                                                    "folder": {
+                                                        "value": "@{item().table}CDC",
+                                                        "type": "Expression"
+                                                    },
+                                                    "file": "cdc.json"
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "max_cdc",
+                                        "type": "Script",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "timeout": "0.12:00:00",
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "linkedServiceName": {
+                                            "referenceName": "AzureSqlDatabase",
+                                            "type": "LinkedServiceReference"
+                                        },
+                                        "typeProperties": {
+                                            "scripts": [
+                                                {
+                                                    "type": "Query",
+                                                    "text": {
+                                                        "value": "SELECT MAX(@{item().cdc_col}) as cdc FROM \n @{item().schema}.@{item().table}",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            ],
+                                            "scriptBlockExecutionTimeout": "02:00:00"
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "WebForAlerts",
+                "type": "WebActivity",
+                "dependsOn": [
+                    {
+                        "activity": "ForEach",
+                        "dependencyConditions": [
+                            "Succeeded",
+                            "Failed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "method": "POST",
+                    "url": "https://prod-20.northcentralus.logic.azure.com:443/workflows/80b979162b2a4a528b947d12e19cdfc9/triggers/When_an_HTTP_request_is_received/paths/invoke?api-version=2016-10-01&sp=%2Ftriggers%2FWhen_an_HTTP_request_is_received%2Frun&sv=1.0&sig=0wu22-WTTTrSzDbWHGsbrATn1ld1r6JZelTv8iNHhCg",
+                    "body": {
+                        "value": "{\n    \"Pipeline_Name\":\"@{pipeline().Pipeline}\",\n    \"Pipeline_RunId\":\"@{pipeline().RunId}\"\n}",
+                        "type": "Expression"
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "input_loop": {
+                "type": "array",
+                "defaultValue": [
+                    {
+                        "schema": "dbo",
+                        "table": "DimUser",
+                        "cdc_col": "updated_at",
+                        "from_date": ""
+                    },
+                    {
+                        "schema": "dbo",
+                        "table": "DimTrack",
+                        "cdc_col": "updated_at",
+                        "from_date": ""
+                    },
+                    {
+                        "schema": "dbo",
+                        "table": "DimDate",
+                        "cdc_col": "date",
+                        "from_date": ""
+                    },
+                    {
+                        "schema": "dbo",
+                        "table": "DimArtist",
+                        "cdc_col": "updated_at",
+                        "from_date": ""
+                    },
+                    {
+                        "schema": "dbo",
+                        "table": "FactStream",
+                        "cdc_col": "stream_timestamp",
+                        "from_date": ""
+                    }
+                ]
+            }
+        },
+        "variables": {
+            "current": {
+                "type": "String"
+            }
+        },
+        "annotations": []
+    }
+}

@@ -1,0 +1,6 @@
+selected resource name:		Incremental Ingestion loop
+selected resource type:		pipeline
+factory name:			spotify-eteproject-data-factory
+factory location:		eastus
+subscription id:		6842eb80-0447-4d56-ae6a-298107fd959f
+time of download (UTC):		Thu, 29 Jan 2026 14:01:00 GMT
